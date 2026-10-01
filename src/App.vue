@@ -1,189 +1,27 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { ref } from "vue";
+import { useDispatchStore } from "./store/dispatch";
+import DispatchConsole from "./components/DispatchConsole.vue";
+import ReviewPanel from "./components/ReviewPanel.vue";
+import ExportSummary from "./components/ExportSummary.vue";
 
-type Field = {
-  key: string;
-  label: string;
-  type?: "number" | "date" | "select";
-  options?: readonly string[];
-};
+const store = useDispatchStore();
+const view = ref<"console" | "review" | "export">("console");
 
-type RecordItem = {
-  id: string;
-  status: string;
-  notes: string;
-  createdAt: string;
-  [key: string]: string | number;
-};
+const devices = ["调度台-01", "手持终端-07", "手持终端-12"];
+const syncTip = ref<string | null>(null);
 
-const project = {
-  "number": 3,
-  "folder": "dfwl/frontend/dfwlfront-3",
-  "framework": "vue",
-  "title": "车辆调度小工具",
-  "subtitle": "维护车辆、司机和任务状态，为空闲车辆分配配送任务。",
-  "industry": "物流",
-  "stack": [
-    "Vue3",
-    "Vite",
-    "TypeScript",
-    "Pinia",
-    "Naive UI"
-  ],
-  "storageKey": "dfwlfront-3-dispatch",
-  "formTitle": "新增配送任务",
-  "primaryAction": "分配任务",
-  "entityLabel": "车辆",
-  "statuses": [
-    "空闲",
-    "执行中",
-    "已完成"
-  ],
-  "filters": [
-    "全部区域",
-    "城北",
-    "城东",
-    "城南"
-  ],
-  "fields": [
-    {
-      "key": "vehicle",
-      "label": "车牌号"
-    },
-    {
-      "key": "driver",
-      "label": "司机"
-    },
-    {
-      "key": "zone",
-      "label": "配送区域",
-      "type": "select",
-      "options": [
-        "城北",
-        "城东",
-        "城南"
-      ]
-    },
-    {
-      "key": "task",
-      "label": "配送任务"
-    }
-  ],
-  "records": [
-    {
-      "vehicle": "沪A-82L6",
-      "driver": "董飞",
-      "zone": "城北",
-      "task": "商超补货",
-      "status": "空闲",
-      "notes": "可立即派车"
-    },
-    {
-      "vehicle": "沪B-73K9",
-      "driver": "周航",
-      "zone": "城东",
-      "task": "医药配送",
-      "status": "执行中",
-      "notes": "预计17:30返回"
-    }
-  ],
-  "metricLabels": [
-    "车辆总数",
-    "执行中",
-    "空闲车辆"
-  ]
-} as const;
-
-const fields = project.fields as readonly Field[];
-const statuses = [...project.statuses];
-
-function createBlank() {
-  return Object.fromEntries(fields.map((field) => [field.key, field.type === "number" ? 0 : ""]));
+async function handleSync() {
+  const res = await store.syncNow();
+  syncTip.value = res.ok
+    ? `同步成功：有效与排队记录已入库，冲突与失效记录保留在核对区。`
+    : `写入失败：本地批次已保留，可在修正后重试（${res.error}）`;
+  setTimeout(() => (syncTip.value = null), 4000);
 }
 
-function loadRecords(): RecordItem[] {
-  const raw = localStorage.getItem(project.storageKey);
-  if (!raw) {
-    return project.records.map((record, index) => ({
-      ...record,
-      id: `seed-${index + 1}`,
-      createdAt: new Date(Date.now() - index * 86400000).toISOString()
-    })) as RecordItem[];
-  }
-  try {
-    return JSON.parse(raw) as RecordItem[];
-  } catch {
-    return [];
-  }
-}
-
-const records = ref<RecordItem[]>(loadRecords());
-const form = reactive<Record<string, string | number>>(createBlank());
-const note = ref("");
-const filter = ref(project.filters[0]);
-
-const filteredRecords = computed(() => {
-  if (filter.value.startsWith("全部")) return records.value;
-  return records.value.filter((record) => Object.values(record).includes(filter.value));
-});
-
-const metrics = computed(() => {
-  const total = records.value.length;
-  const second = records.value.filter((record) => record.status === statuses[1]).length;
-  const third = records.value.filter((record) => record.status === statuses[2]).length;
-  const numberValues = records.value.flatMap((record) =>
-    fields.filter((field) => field.type === "number").map((field) => Number(record[field.key] || 0))
-  );
-  const sum = numberValues.reduce((acc, value) => acc + value, 0);
-  return [total, second || sum, third || Math.round(sum / Math.max(total, 1))];
-});
-
-const chartRows = computed(() => statuses.map((status) => ({
-  status,
-  value: records.value.filter((record) => record.status === status).length
-})));
-
-const maxChart = computed(() => Math.max(1, ...chartRows.value.map((row) => row.value)));
-
-function persist() {
-  localStorage.setItem(project.storageKey, JSON.stringify(records.value));
-}
-
-function nextStatus(status: string) {
-  const index = statuses.indexOf(status);
-  return statuses[(index + 1) % statuses.length];
-}
-
-function primaryText(record: RecordItem) {
-  const first = fields[0];
-  const second = fields[1];
-  return [record[first.key], record[second.key]].filter(Boolean).join(" / ") || project.entityLabel;
-}
-
-function submit() {
-  records.value = [
-    {
-      ...form,
-      id: crypto.randomUUID(),
-      status: statuses[0],
-      notes: note.value || "暂无备注",
-      createdAt: new Date().toISOString()
-    } as RecordItem,
-    ...records.value
-  ];
-  Object.assign(form, createBlank());
-  note.value = "";
-  persist();
-}
-
-function flow(record: RecordItem) {
-  record.status = nextStatus(record.status);
-  persist();
-}
-
-function remove(id: string) {
-  records.value = records.value.filter((record) => record.id !== id);
-  persist();
+function loadDemo() {
+  store.loadDemoScenario();
+  view.value = "console";
 }
 </script>
 
@@ -192,78 +30,64 @@ function remove(id: string) {
     <div class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">{{ project.industry }}行业前端最小闭环</p>
-          <h1>{{ project.title }}</h1>
-          <p class="subtitle">{{ project.subtitle }}</p>
+          <p class="eyebrow">物流调度 · 离线优先</p>
+          <h1>离线派车合并台</h1>
+          <p class="subtitle">
+            按发起时刻仲裁任务版本，同车同班次唯一占用，区域容量排队，冲突留待核对。
+          </p>
         </div>
-        <div class="stack">
-          <span v-for="item in project.stack" :key="item" class="tag">{{ item }}</span>
+        <div class="top-controls">
+          <label class="device-pick">
+            当前设备
+            <select :value="store.deviceId" @change="store.setDevice(($event.target as HTMLSelectElement).value)">
+              <option v-for="device in devices" :key="device" :value="device">{{ device }}</option>
+            </select>
+          </label>
+          <label class="switch-pick">
+            <input type="checkbox" v-model="store.failNextWrite" />
+            模拟下一次写入失败
+          </label>
+          <button type="button" class="secondary" @click="loadDemo">装载离线重连演示</button>
+          <button type="button" class="danger ghost" @click="store.resetAll()">清空</button>
         </div>
       </header>
 
-      <section class="metrics">
-        <article v-for="(label, index) in project.metricLabels" :key="label" class="metric">
-          <span>{{ label }}</span>
-          <strong>{{ metrics[index] }}</strong>
-        </article>
+      <section class="sync-bar">
+        <div class="sync-info">
+          <span class="dot" :class="{ ok: store.outbox.length === 0, busy: store.outbox.length > 0 }" />
+          <span v-if="store.outbox.length === 0">本地无待写批次</span>
+          <span v-else>{{ store.outbox.length }} 个本地批次待同步，共
+            {{ store.outbox.reduce((n, b) => n + b.ops.length, 0) }} 笔记录
+          </span>
+          <span v-if="store.lastSyncAt" class="muted">上次成功同步：{{ new Date(store.lastSyncAt).toLocaleTimeString('zh-CN', { hour12: false }) }}</span>
+        </div>
+        <div class="sync-actions">
+          <button type="button" :disabled="store.syncing || store.outbox.length === 0" @click="handleSync">
+            {{ store.syncing ? "同步中…" : "重连并同步 / 失败重试" }}
+          </button>
+        </div>
       </section>
 
-      <section class="workspace">
-        <form class="panel" @submit.prevent="submit">
-          <h2>{{ project.formTitle }}</h2>
-          <div class="form-grid">
-            <label v-for="field in fields" :key="field.key">
-              {{ field.label }}
-              <select v-if="field.type === 'select'" v-model="form[field.key]" required>
-                <option value="">请选择</option>
-                <option v-for="option in field.options" :key="option">{{ option }}</option>
-              </select>
-              <input v-else v-model="form[field.key]" :type="field.type || 'text'" required />
-            </label>
-            <label>
-              备注
-              <textarea v-model="note" placeholder="填写处理说明或现场备注" />
-            </label>
-            <button type="submit">{{ project.primaryAction }}</button>
-          </div>
-        </form>
+      <p v-if="syncTip" class="sync-tip" :class="{ error: syncTip.includes('失败') }">{{ syncTip }}</p>
 
-        <section class="list-panel">
-          <div class="toolbar">
-            <h2>{{ project.entityLabel }}列表</h2>
-            <select v-model="filter">
-              <option v-for="item in project.filters" :key="item">{{ item }}</option>
-            </select>
-          </div>
+      <nav class="tabs">
+        <button :class="{ active: view === 'console' }" type="button" @click="view = 'console'">
+          调度台
+        </button>
+        <button :class="{ active: view === 'review' }" type="button" @click="view = 'review'">
+          核对区
+          <span v-if="store.mergeResult.reviewItems.length" class="tab-badge">
+            {{ store.mergeResult.reviewItems.length }}
+          </span>
+        </button>
+        <button :class="{ active: view === 'export' }" type="button" @click="view = 'export'">
+          导出摘要
+        </button>
+      </nav>
 
-          <div class="record-grid">
-            <div v-if="filteredRecords.length === 0" class="empty">暂无匹配数据</div>
-            <article v-for="record in filteredRecords" :key="record.id" class="record">
-              <div class="record-head">
-                <p class="record-title">{{ primaryText(record) }}</p>
-                <span class="status">{{ record.status }}</span>
-              </div>
-              <div class="details">
-                <span v-for="field in fields" :key="field.key">{{ field.label }}: {{ record[field.key] }}</span>
-              </div>
-              <p class="note">{{ record.notes }}</p>
-              <div class="actions">
-                <button type="button" @click="flow(record)">流转状态</button>
-                <button class="secondary" type="button" @click="navigator.clipboard?.writeText(primaryText(record))">复制摘要</button>
-                <button class="danger" type="button" @click="remove(record.id)">删除</button>
-              </div>
-            </article>
-          </div>
-
-          <div class="mini-chart">
-            <div v-for="row in chartRows" :key="row.status" class="bar">
-              <span>{{ row.status }}</span>
-              <div class="bar-track"><div class="bar-fill" :style="{ width: `${(row.value / maxChart) * 100}%` }" /></div>
-              <strong>{{ row.value }}</strong>
-            </div>
-          </div>
-        </section>
-      </section>
+      <DispatchConsole v-if="view === 'console'" />
+      <ReviewPanel v-else-if="view === 'review'" />
+      <ExportSummary v-else />
     </div>
   </main>
 </template>

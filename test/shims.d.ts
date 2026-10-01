@@ -1,0 +1,12 @@
+declare module "jsdom" {
+  export class JSDOM {
+    constructor(html?: string, options?: unknown);
+    window: {
+      document: Document;
+      navigator: Navigator;
+      localStorage: Storage;
+      Blob: typeof Blob;
+      URL: typeof URL;
+    };
+  }
+}
